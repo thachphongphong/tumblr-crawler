@@ -8,6 +8,8 @@ from six.moves import queue as Queue
 from threading import Thread
 import re
 import json
+import time
+import logging
 
 
 # Setting timeout
@@ -25,6 +27,8 @@ MEDIA_NUM = 50
 # Numbers of downloading threads concurrently
 THREADS = 10
 
+# INIT LOG
+logging.basicConfig(filename='example.log',level=logging.DEBUG)
 
 def video_hd_match():
     hd_pattern = re.compile(r'.*"hdUrl":("([^\s,]*)"|false),')
@@ -100,7 +104,12 @@ class DownloadWorker(Thread):
                             "%s" % post)
 
     def _download(self, medium_type, medium_url, target_folder):
+        if not os.path.isdir(target_folder):
+            os.mkdir(target_folder)
         medium_name = medium_url.split("/")[-1].split("?")[0]
+        
+        #Remove tumblr_ in file name        
+        medium_name = medium_name.replace("tumblr_","")
         if medium_type == "video":
             if not medium_name.startswith("tumblr"):
                 medium_name = "_".join([medium_url.split("/")[-2],
@@ -110,8 +119,7 @@ class DownloadWorker(Thread):
 
         file_path = os.path.join(target_folder, medium_name)
         if not os.path.isfile(file_path):
-            print("Downloading %s from %s.\n" % (medium_name,
-                                                 medium_url))
+            print("Downloading %s from %s.\n" % (medium_name, medium_url))
             retry_times = 0
             while retry_times < RETRY:
                 try:
@@ -163,7 +171,7 @@ class CrawlerScheduler(object):
 
     def download_media(self, site):
         self.download_photos(site)
-        self.download_videos(site)
+#        self.download_videos(site)
 
     def download_videos(self, site):
         self._download_media(site, "video", START)
@@ -186,12 +194,14 @@ class CrawlerScheduler(object):
             os.mkdir(target_folder)
 
         base_url = "http://{0}.tumblr.com/api/read?type={1}&num={2}&start={3}"
+
         start = START
         while True:
             media_url = base_url.format(site, medium_type, MEDIA_NUM, start)
             response = requests.get(media_url,
                                     proxies=self.proxies)
             data = xmltodict.parse(response.content)
+            
             if response.status_code == 404:
                 print("Site %s does not exist" % site)
                 break
@@ -199,15 +209,21 @@ class CrawlerScheduler(object):
             try:
                 posts = data["tumblr"]["posts"]["post"]
                 for post in posts:
+                    ptime = post["@unix-timestamp"]
+                    dtime = time.strftime('%Y-%m-%d', time.localtime(int(ptime)))               
+                    logging.debug("Post time >>>> %s" % dtime)
+
+                    # ADD TIME DIRECTORY
+                    time_folder = os.path.join(target_folder, dtime)
                     try:
                         # if post has photoset, walk into photoset for each photo
                         photoset = post["photoset"]["photo"]
                         for photo in photoset:
-                            self.queue.put((medium_type, photo, target_folder))
+                            self.queue.put((medium_type, photo, time_folder))
                     except:
                         # select the largest resolution
                         # usually in the first element
-                        self.queue.put((medium_type, post, target_folder))
+                        self.queue.put((medium_type, post, time_folder))
                 start += MEDIA_NUM
             except KeyError:
                 break
@@ -221,21 +237,12 @@ def usage():
           "Sample File Content:\nsite1,site2\n\n"
           "Or use command line options:\n\n"
           "Sample:\npython tumblr-photo-video-ripper.py site1,site2\n\n\n")
-    print(u"未找到sites.txt文件，请创建.\n"
-          u"请在文件中指定Tumblr站点名，并以 逗号/空格/tab/表格鍵/回车符 分割，支持多行.\n"
-          u"保存文件并重试.\n\n"
-          u"例子: site1,site2\n\n"
-          u"或者直接使用命令行参数指定站点\n"
-          u"例子: python tumblr-photo-video-ripper.py site1,site2")
 
 
 def illegal_json():
     print("Illegal JSON format in file 'proxies.json'.\n"
           "Please refer to 'proxies_sample1.json' and 'proxies_sample2.json'.\n"
           "And go to http://jsonlint.com/ for validation.\n\n\n")
-    print(u"文件proxies.json格式非法.\n"
-          u"请参照示例文件'proxies_sample1.json'和'proxies_sample2.json'.\n"
-          u"然后去 http://jsonlint.com/ 进行验证.")
 
 
 def parse_sites(filename):
